@@ -1,0 +1,420 @@
+// ============================================================
+// LogiCore Enterprise WMS - Prisma Schema
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum EmployeeType {
+  permanent
+  adhoc
+}
+
+enum EmployeeStatus {
+  free
+  assigned
+  working
+  marked_done
+  released
+  unavailable
+  on_leave
+  inactive
+}
+
+enum TaskStatus {
+  draft
+  scheduled
+  worker_allocation_pending
+  ready_to_start
+  in_progress
+  partially_completed
+  completed
+  verified
+  closed
+  cancelled
+}
+
+enum WorkerType {
+  permanent
+  adhoc
+}
+
+enum AssignmentStatus {
+  assigned
+  accepted
+  working
+  marked_done
+  verified_done
+  released
+  absent
+  replaced
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  late
+}
+
+enum AuditAction {
+  user_login
+  user_logout
+  task_created
+  task_updated
+  task_cancelled
+  task_completed
+  task_verified
+  task_closed
+  worker_assigned
+  worker_borrowed
+  adhoc_hired
+  worker_marked_done
+  assistant_marked_done
+  worker_released
+  user_permission_changed
+  employee_created
+  employee_updated
+  user_created
+  user_updated
+}
+
+// ============================================================
+// CORE TABLES
+// ============================================================
+
+model Warehouse {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  code        String   @unique
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  clusters  Cluster[]
+  employees Employee[]
+  tasks     Task[]
+  users     User[]
+
+  @@map("warehouses")
+}
+
+model Cluster {
+  id          String   @id @default(cuid())
+  warehouseId String   @map("warehouse_id")
+  name        String
+  code        String
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+
+  employees          Employee[]
+  tasks              Task[]
+  users              User[]
+  taskAssignmentsTo  TaskAssignment[] @relation("AssignedCluster")
+  taskAssignmentsFrom TaskAssignment[] @relation("OriginalCluster")
+  workerMovementsTo  WorkerMovement[] @relation("MovedToCluster")
+  workerMovementsFrom WorkerMovement[] @relation("MovedFromCluster")
+
+  @@unique([warehouseId, code])
+  @@map("clusters")
+}
+
+model Role {
+  id          String @id @default(cuid())
+  name        String @unique
+  displayName String @map("display_name")
+  permissions Json   @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  users User[]
+
+  @@map("roles")
+}
+
+model User {
+  id          String   @id @default(cuid()) // matches Supabase auth user id
+  email       String   @unique
+  name        String
+  roleId      String   @map("role_id")
+  warehouseId String?  @map("warehouse_id")
+  clusterId   String?  @map("cluster_id")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  role      Role       @relation(fields: [roleId], references: [id])
+  warehouse Warehouse? @relation(fields: [warehouseId], references: [id])
+  cluster   Cluster?   @relation(fields: [clusterId], references: [id])
+  employee  Employee?
+
+  auditLogs         AuditLog[]
+  createdTasks      Task[]           @relation("TaskCreatedBy")
+  supervisedTasks   Task[]           @relation("TaskSupervisor")
+  createdAssignments TaskAssignment[] @relation("AssignmentCreatedBy")
+  notifications     Notification[]
+
+  @@map("users")
+}
+
+model Employee {
+  id              String         @id @default(cuid())
+  userId          String?        @unique @map("user_id")
+  employeeCode    String         @unique @map("employee_code")
+  name            String
+  phone           String?
+  homeWarehouseId String         @map("home_warehouse_id")
+  homeClusterId   String         @map("home_cluster_id")
+  employeeType    EmployeeType   @map("employee_type")
+  status          EmployeeStatus @default(free)
+  isActive        Boolean        @default(true) @map("is_active")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  user          User?      @relation(fields: [userId], references: [id])
+  homeWarehouse Warehouse  @relation(fields: [homeWarehouseId], references: [id])
+  homeCluster   Cluster    @relation(fields: [homeClusterId], references: [id])
+
+  taskAssignments TaskAssignment[]
+  workerMovements WorkerMovement[]
+  attendance      Attendance[]
+
+  @@index([homeClusterId])
+  @@index([status])
+  @@index([employeeType])
+  @@map("employees")
+}
+
+// ============================================================
+// TASK STRUCTURE
+// ============================================================
+
+model Client {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  code      String   @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tasks Task[]
+
+  @@map("clients")
+}
+
+model TaskCategory {
+  id   String @id @default(cuid())
+  name String @unique // import, export, domestic
+
+  subCategories TaskSubCategory[]
+  tasks         Task[]
+
+  @@map("task_categories")
+}
+
+model TaskSubCategory {
+  id         String @id @default(cuid())
+  categoryId String @map("category_id")
+  name       String // FCL, LCL, Empty Return, Local Export, Warehouse Delivery, Hub Transfer
+
+  category TaskCategory @relation(fields: [categoryId], references: [id])
+  tasks    Task[]
+
+  @@map("task_sub_categories")
+}
+
+model EquipmentType {
+  id   String @id @default(cuid())
+  name String @unique // 20ft Container, 40ft Container, 16.5ft Lorry, CBM/Pallet
+
+  tasks Task[]
+
+  @@map("equipment_types")
+}
+
+// ============================================================
+// TASKS
+// ============================================================
+
+model Task {
+  id                  String     @id @default(cuid())
+  taskNumber          String     @unique @map("task_number")
+  warehouseId         String     @map("warehouse_id")
+  clusterId           String     @map("cluster_id")
+  clientId            String     @map("client_id")
+  categoryId          String     @map("category_id")
+  subCategoryId       String     @map("sub_category_id")
+  equipmentTypeId     String     @map("equipment_type_id")
+  equipmentQuantity   Int        @map("equipment_quantity")
+  taskDate            DateTime   @map("task_date") @db.Date
+  startTime           DateTime   @map("start_time")
+  endTime             DateTime   @map("end_time")
+  actualStartTime     DateTime?  @map("actual_start_time")
+  actualEndTime       DateTime?  @map("actual_end_time")
+  requiredWorkerCount Int        @map("required_worker_count")
+  status              TaskStatus @default(draft)
+  createdById         String     @map("created_by")
+  supervisorId        String?    @map("supervisor_id")
+  notes               String?
+  createdAt           DateTime   @default(now()) @map("created_at")
+  updatedAt           DateTime   @updatedAt @map("updated_at")
+
+  warehouse     Warehouse       @relation(fields: [warehouseId], references: [id])
+  cluster       Cluster         @relation(fields: [clusterId], references: [id])
+  client        Client          @relation(fields: [clientId], references: [id])
+  category      TaskCategory    @relation(fields: [categoryId], references: [id])
+  subCategory   TaskSubCategory @relation(fields: [subCategoryId], references: [id])
+  equipmentType EquipmentType   @relation(fields: [equipmentTypeId], references: [id])
+  createdBy     User            @relation("TaskCreatedBy", fields: [createdById], references: [id])
+  supervisor    User?           @relation("TaskSupervisor", fields: [supervisorId], references: [id])
+
+  assignments   TaskAssignment[]
+  statusHistory TaskStatusHistory[]
+  auditLogs     AuditLog[]
+  workerMovements WorkerMovement[]
+
+  @@index([warehouseId])
+  @@index([clusterId])
+  @@index([status])
+  @@index([taskDate])
+  @@index([clientId])
+  @@map("tasks")
+}
+
+model TaskAssignment {
+  id                    String           @id @default(cuid())
+  taskId                String           @map("task_id")
+  employeeId            String           @map("employee_id")
+  workerType            WorkerType       @map("worker_type")
+  originalWarehouseId   String           @map("original_warehouse_id")
+  originalClusterId     String           @map("original_cluster_id")
+  assignedWarehouseId   String           @map("assigned_warehouse_id")
+  assignedClusterId     String           @map("assigned_cluster_id")
+  isBorrowed            Boolean          @default(false) @map("is_borrowed")
+  assignmentStartTime   DateTime         @map("assignment_start_time")
+  assignmentEndTime     DateTime         @map("assignment_end_time")
+  status                AssignmentStatus @default(assigned)
+  markedDoneAt          DateTime?        @map("marked_done_at")
+  verifiedDoneAt        DateTime?        @map("verified_done_at")
+  releasedAt            DateTime?        @map("released_at")
+  createdById           String           @map("created_by")
+  createdAt             DateTime         @default(now()) @map("created_at")
+  updatedAt             DateTime         @updatedAt @map("updated_at")
+
+  task              Task      @relation(fields: [taskId], references: [id])
+  employee          Employee  @relation(fields: [employeeId], references: [id])
+  originalCluster   Cluster   @relation("OriginalCluster", fields: [originalClusterId], references: [id])
+  assignedCluster   Cluster   @relation("AssignedCluster", fields: [assignedClusterId], references: [id])
+  createdBy         User      @relation("AssignmentCreatedBy", fields: [createdById], references: [id])
+
+  @@index([taskId])
+  @@index([employeeId])
+  @@index([status])
+  @@map("task_assignments")
+}
+
+model WorkerMovement {
+  id              String   @id @default(cuid())
+  employeeId      String   @map("employee_id")
+  taskId          String   @map("task_id")
+  fromWarehouseId String   @map("from_warehouse_id")
+  fromClusterId   String   @map("from_cluster_id")
+  toWarehouseId   String   @map("to_warehouse_id")
+  toClusterId     String   @map("to_cluster_id")
+  movedAt         DateTime @default(now()) @map("moved_at")
+  returnedAt      DateTime? @map("returned_at")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  employee      Employee  @relation(fields: [employeeId], references: [id])
+  task          Task      @relation(fields: [taskId], references: [id])
+  fromCluster   Cluster   @relation("MovedFromCluster", fields: [fromClusterId], references: [id])
+  toCluster     Cluster   @relation("MovedToCluster", fields: [toClusterId], references: [id])
+
+  @@index([employeeId])
+  @@index([taskId])
+  @@map("worker_movements")
+}
+
+model Attendance {
+  id               String           @id @default(cuid())
+  employeeId       String           @map("employee_id")
+  taskId           String           @map("task_id")
+  date             DateTime         @db.Date
+  checkInTime      DateTime?        @map("check_in_time")
+  checkOutTime     DateTime?        @map("check_out_time")
+  status           AttendanceStatus @default(present)
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId])
+  @@index([taskId])
+  @@index([date])
+  @@map("attendance")
+}
+
+model TaskStatusHistory {
+  id         String     @id @default(cuid())
+  taskId     String     @map("task_id")
+  fromStatus TaskStatus? @map("from_status")
+  toStatus   TaskStatus @map("to_status")
+  changedBy  String     @map("changed_by")
+  reason     String?
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  task Task @relation(fields: [taskId], references: [id])
+
+  @@index([taskId])
+  @@map("task_status_history")
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  userId     String      @map("user_id")
+  action     AuditAction
+  entityType String      @map("entity_type")
+  entityId   String      @map("entity_id")
+  oldValue   Json?       @map("old_value")
+  newValue   Json?       @map("new_value")
+  ipAddress  String?     @map("ip_address")
+  taskId     String?     @map("task_id")
+  createdAt  DateTime    @default(now()) @map("created_at")
+
+  user User  @relation(fields: [userId], references: [id])
+  task Task? @relation(fields: [taskId], references: [id])
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  title     String
+  message   String
+  type      String   @default("info") // info, warning, success, error
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([isRead])
+  @@map("notifications")
+}
