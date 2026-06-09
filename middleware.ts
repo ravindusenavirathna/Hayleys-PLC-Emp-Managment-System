@@ -54,10 +54,20 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // Get the current session
+  // Optimize: Skip heavy auth checks for prefetch requests to speed up client-side transitions
+  const isPrefetch =
+    request.headers.get("x-purpose") === "prefetch" ||
+    request.headers.get("purpose") === "prefetch";
+
+  if (isPrefetch) {
+    return supabaseResponse;
+  }
+
+  // Get the current session (uses local cookie decoding - instant, <1ms)
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    data: { session },
+  } = await supabase.auth.getSession();
+  const user = session?.user ?? null;
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // AUTH GUARD: Redirect unauthenticated users to login
